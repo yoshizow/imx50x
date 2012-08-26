@@ -1,5 +1,5 @@
 /*
- *  paraanim.c
+ *  paraanim.cpp
  *
  *  Copyright (C) 2001 Russell King.
  *  Copyright (C) 2012 yoshizow
@@ -22,12 +22,11 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/time.h>
-
 #include <sys/types.h>
-#include <linux/mxcfb.h>
 
-#include "tslib.h"
+#include <tslib.h>
 #include "fbutils.h"
+#include "font.h"
 
 #define NR_COLORS 16
 
@@ -39,7 +38,7 @@ struct ts_button {
 };
 
 /* [inactive] border fill text [active] border fill text */
-static int button_palette [6] = {
+static int button_palette[6] = {
     2, 12, 0, 2, 6, 15
 };
 
@@ -48,66 +47,13 @@ static int button_palette [6] = {
 
 enum {
     BUTTON_PLAY,
+    BUTTON_PLAY_MONOCHROME,
+    BUTTON_NEXT,
     BUTTON_CLEAR,
     BUTTON_QUIT,
     NR_BUTTONS
 };
-static struct ts_button buttons [NR_BUTTONS];
-
-#define MXC_DAMAGE_MODE_FULL       0x01
-#define MXC_DAMAGE_MODE_MONOCHROME 0x02
-
-int mxcfb = -1;
-
-static int64_t current_msec(void)
-{
-    struct timeval tv;
-
-    gettimeofday(&tv, NULL);
-    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
-}
-
-static void mxc_damage(int x, int y, int w, int h, int mode)
-{
-    struct mxcfb_update_data param;
-    const int MARKER = 999;
-    int r;
-    if(mxcfb < 0) {
-	mxcfb = open("/dev/fb0", O_RDWR);
-    }
-    if(mxcfb < 0){
-	printf("mxcfb open error!\n");
-        return;
-    }
-
-    int64_t start_time = current_msec();
-
-    param.update_region.left = x;
-    param.update_region.top = y;
-    param.update_region.width = w;
-    param.update_region.height = h;
-    param.waveform_mode = 4;//WAVEFORM_MODE_AUTO;
-    if (mode & MXC_DAMAGE_MODE_FULL) {
-        param.update_mode = UPDATE_MODE_FULL;
-    } else {
-        param.update_mode = UPDATE_MODE_PARTIAL;
-    }
-    param.update_marker = MARKER;
-    param.temp = 0;
-    if (mode & MXC_DAMAGE_MODE_MONOCHROME)
-        param.flags = EPDC_FLAG_FORCE_MONOCHROME;
-    else
-        param.flags = 0;
-    /* alt_buffer_data */
-    r = ioctl(mxcfb, MXCFB_SEND_UPDATE, &param);
-    printf("send update = %d\n",r);
-#if 0
-    r = ioctl(mxcfb, MXCFB_WAIT_FOR_UPDATE_COMPLETE, &MARKER);
-    printf("wait = %d\n",r);
-#endif
-    int64_t end_time = current_msec();
-    printf("update time = %lld msec\n", end_time - start_time);
-}
+static struct ts_button buttons[NR_BUTTONS];
 
 static void sig(int sig)
 {
@@ -162,13 +108,20 @@ static void refresh_screen()
     int i;
 
     fillrect(0, 0, xres - 1, yres - 1, WHITE);
-    //put_string_center(xres/2, yres/4,   "TSLIB test program", 2);
-    //put_string_center(xres/2, yres/4+20,"Touch screen to move crosshair", 0);
 
     for (i = 0; i < NR_BUTTONS; i++)
         button_draw(&buttons [i]);
 
-    mxc_damage(0, 0, 800, 600, MXC_DAMAGE_MODE_FULL | MXC_DAMAGE_MODE_MONOCHROME);
+    mxc_damage(0, 0, xres, yres, MXC_DAMAGE_MODE_FULL, true);
+}
+
+static void finalize_screen()
+{
+    int i;
+
+    fillrect(0, 0, xres - 1, yres - 1, WHITE);
+
+    mxc_damage(0, 0, xres, yres, MXC_DAMAGE_MODE_FULL, true);
 }
 
 static void reflect_screen(int x1, int y1, int x2, int y2, int mode)
@@ -181,7 +134,7 @@ static void reflect_screen(int x1, int y1, int x2, int y2, int mode)
     if (y1 > y2) {
 	t = y1; y1 = y2; y2 = t;
     }
-    mxc_damage(x1, y1, x2 - x1 + 1, y2 - y1 + 1, mode);
+    mxc_damage(x1, y1, x2 - x1 + 1, y2 - y1 + 1, mode, false);
 }
 
 int main(void)
@@ -220,6 +173,8 @@ int main(void)
         exit(1);
     }
 
+    setfont(&font_vga_8x16);
+
     x = xres/2;
     y = yres/2;
 
@@ -228,15 +183,19 @@ int main(void)
 
     /* Initialize buttons */
     memset(&buttons, 0, sizeof (buttons));
-    buttons[0].w = buttons[1].w = buttons[2].w = xres / 4;
-    buttons[0].h = buttons[1].h = buttons[2].h = 20;
+    buttons[0].w = buttons[1].w = buttons[2].w = buttons[3].w = buttons[4].w = xres / 6;
+    buttons[0].h = buttons[1].h = buttons[2].h = buttons[3].h = buttons[4].h = 40;
     buttons[0].x = 0;
-    buttons[1].x = (3 * xres) / 8;
-    buttons[2].x = (3 * xres) / 4;
-    buttons[0].y = buttons[1].y = buttons[2].y = 10;
-    buttons[0].text = "Play";
-    buttons[1].text = "Clear";
-    buttons[2].text = "Quit";
+    buttons[1].x = (5 * xres) / 24;
+    buttons[2].x = (10 * xres) / 24;
+    buttons[3].x = (15 * xres) / 24;
+    buttons[4].x = (20 * xres) / 24;
+    buttons[0].y = buttons[1].y = buttons[2].y = buttons[3].y = buttons[4].y = 10;
+    buttons[0].text = (char*)"Play";
+    buttons[1].text = (char*)"PlayMono";
+    buttons[2].text = (char*)"Next";
+    buttons[3].text = (char*)"Clear";
+    buttons[4].text = (char*)"Quit";
 
     refresh_screen();
 
@@ -261,6 +220,9 @@ int main(void)
                 case BUTTON_PLAY:
                     refresh_screen();
                     break;
+                case BUTTON_PLAY_MONOCHROME:
+                    refresh_screen();
+                    break;
                 case BUTTON_CLEAR:
                     refresh_screen();
                     break;
@@ -268,23 +230,26 @@ int main(void)
                     quit_pressed = true;
                 }
 
-        printf("%ld.%06ld: %6d %6d %6d\n", samp.tv.tv_sec, samp.tv.tv_usec,
-               samp.x, samp.y, samp.pressure);
+        /*printf("%ld.%06ld: %6d %6d %6d\n", samp.tv.tv_sec, samp.tv.tv_usec,
+                 samp.x, samp.y, samp.pressure);*/
 
         if (samp.pressure > 0) {
             if (mode_pressed) {
-                line (x, y, samp.x, samp.y, BLACK);
-                reflect_screen(x, y, samp.x, samp.y, MXC_DAMAGE_MODE_MONOCHROME);
+                line(x, y, samp.x, samp.y, BLACK);
             }
             x = samp.x;
             y = samp.y;
             mode_pressed = true;
         } else
             mode_pressed = false;
+
+        //mxc_damage(0, 31, xres, yres - 31, MXC_DAMAGE_MODE_MONOCHROME);
+        mxc_damage(0, 0, xres, yres, MXC_DAMAGE_MODE_MONOCHROME, false);
+
         if (quit_pressed)
             break;
-        //mxc_damage(0, 31, xres, yres - 31, MXC_DAMAGE_MODE_MONOCHROME);
     }
+    finalize_screen();
     close_framebuffer();
     return 0;
 }
