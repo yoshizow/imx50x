@@ -24,6 +24,7 @@
 #include <linux/vt.h>
 #include <linux/kd.h>
 #include <linux/fb.h>
+#include <linux/mxcfb.h>
 
 #include "font.h"
 #include "fbutils.h"
@@ -42,6 +43,7 @@ static unsigned char **line_addr;
 static int fb_fd=0;
 static int bytes_per_pixel;
 static unsigned colormap [256];
+static const struct fbcon_font_desc * current_font = &font_vga_8x8;
 __u32 xres, yres;
 
 static char *defaultfbdevice = "/dev/fb0";
@@ -191,13 +193,19 @@ void put_cross(int x, int y, unsigned colidx)
 #endif
 }
 
+void setfont(const struct fbcon_font_desc *font)
+{
+	if (font != NULL)
+		current_font = font;
+}
+
 void put_char(int x, int y, int c, int colidx)
 {
 	int i,j,bits;
 
-	for (i = 0; i < font_vga_8x8.height; i++) {
-		bits = font_vga_8x8.data [font_vga_8x8.height * c + i];
-		for (j = 0; j < font_vga_8x8.width; j++, bits <<= 1)
+	for (i = 0; i < current_font->height; i++) {
+		bits = current_font->data [current_font->height * c + i];
+		for (j = 0; j < current_font->width; j++, bits <<= 1)
 			if (bits & 0x80)
 				pixel (x + j, y + i, colidx);
 	}
@@ -206,15 +214,15 @@ void put_char(int x, int y, int c, int colidx)
 void put_string(int x, int y, char *s, unsigned colidx)
 {
 	int i;
-	for (i = 0; *s; i++, x += font_vga_8x8.width, s++)
+	for (i = 0; *s; i++, x += current_font->width, s++)
 		put_char (x, y, *s, colidx);
 }
 
 void put_string_center(int x, int y, char *s, unsigned colidx)
 {
 	size_t sl = strlen (s);
-        put_string (x - (sl / 2) * font_vga_8x8.width,
-                    y - font_vga_8x8.height / 2, s, colidx);
+        put_string (x - (sl / 2) * current_font->width,
+                    y - current_font->height / 2, s, colidx);
 }
 
 void setcolor(unsigned colidx, unsigned value)
@@ -390,4 +398,55 @@ void fillrect (int x1, int y1, int x2, int y2, unsigned colidx)
 			loc.p8 += bytes_per_pixel;
 		}
 	}
+}
+
+/*** EPD ***/
+
+static int64_t current_msec(void)
+{
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+void mxc_damage(int x, int y, int w, int h, int mode, int wait)
+{
+	struct mxcfb_update_data param;
+        
+	const int MARKER = 999;
+	int r;
+
+	if (fb_fd < 0) {
+		return;
+	}
+
+	int64_t start_time = current_msec();
+
+	param.update_region.left = x;
+	param.update_region.top = y;
+	param.update_region.width = w;
+	param.update_region.height = h;
+	if (mode & MXC_DAMAGE_MODE_FULL)
+		param.update_mode = UPDATE_MODE_FULL;
+	else
+		param.update_mode = UPDATE_MODE_PARTIAL;
+	param.update_marker = MARKER;
+	param.temp = 0;
+	if (mode & MXC_DAMAGE_MODE_MONOCHROME) {
+		param.waveform_mode = 4;
+		param.flags = EPDC_FLAG_FORCE_MONOCHROME;
+	} else {
+		param.waveform_mode = WAVEFORM_MODE_AUTO;
+		param.flags = 0;
+	}
+
+	r = ioctl(fb_fd, MXCFB_SEND_UPDATE, &param);
+	printf("send update = %d\n", r);
+	if (wait) {
+		r = ioctl(fb_fd, MXCFB_WAIT_FOR_UPDATE_COMPLETE, &MARKER);
+		printf("wait = %d\n", r);
+	}
+	int64_t end_time = current_msec();
+	printf("update time = %lld msec\n", end_time - start_time);
 }

@@ -13,6 +13,10 @@
 
 #include <linux/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct fbcon_font_desc {
     int idx;
     char *name;
@@ -34,5 +38,9 @@ extern struct fbcon_font_desc	font_vga_8x8,
 
 /* Max. length for the name of a predefined font */
 #define MAX_FONT_NAME	32
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _VIDEO_FONT_H */
