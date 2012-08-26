@@ -23,6 +23,8 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
+#include <list>
 
 #include <tslib.h>
 #include "fbutils.h"
@@ -54,6 +56,15 @@ enum {
     NR_BUTTONS
 };
 static struct ts_button buttons[NR_BUTTONS];
+
+class Line {
+public:
+    Line(int x1, int y1, int x2, int y2) : x1(x1), y1(y1), x2(x2), y2(y2) {}
+    int x1, y1, x2, y2;
+};
+
+typedef std::list<Line> Drawing;
+typedef std::list<Drawing> Animation;
 
 static void sig(int sig)
 {
@@ -103,7 +114,7 @@ button_handle(struct ts_button *button, struct ts_sample *samp)
     return 0;
 }
 
-static void refresh_screen()
+static void refresh_screen(bool full = true)
 {
     int i;
 
@@ -112,7 +123,7 @@ static void refresh_screen()
     for (i = 0; i < NR_BUTTONS; i++)
         button_draw(&buttons [i]);
 
-    mxc_damage(0, 0, xres, yres, MXC_DAMAGE_MODE_FULL, true);
+    mxc_damage(0, 0, xres, yres, full ? MXC_DAMAGE_MODE_FULL : MXC_DAMAGE_MODE_MONOCHROME, true);
 }
 
 static void finalize_screen()
@@ -137,6 +148,25 @@ static void reflect_screen(int x1, int y1, int x2, int y2, int mode)
     mxc_damage(x1, y1, x2 - x1 + 1, y2 - y1 + 1, mode, false);
 }
 
+static void draw_frame(const Drawing& drawing)
+{
+    fillrect(0, 0, xres - 1, yres - 1, WHITE);
+    for (Drawing::const_iterator it = drawing.begin(); it != drawing.end(); it++) {
+        const Line& e = *it;
+        line(e.x1, e.y1, e.x2, e.y2, BLACK);
+    }
+}
+
+static void play(const Animation& animation, bool mono)
+{
+    refresh_screen();
+    for (Animation::const_iterator it = animation.begin(); it != animation.end(); it++) {
+        draw_frame(*it);
+        mxc_damage(0, 0, xres, yres, mono ? MXC_DAMAGE_MODE_MONOCHROME: 0, true);
+    }
+    sleep(1);
+}
+
 int main(void)
 {
     struct tsdev *ts;
@@ -145,7 +175,10 @@ int main(void)
     bool mode_pressed = false;
     bool quit_pressed = false;
 
-    char *tsdevice=NULL;
+    Animation animation;
+    Drawing current_drawing;
+
+    char *tsdevice = NULL;
 
     signal(SIGSEGV, sig);
     signal(SIGINT, sig);
@@ -200,6 +233,7 @@ int main(void)
     refresh_screen();
 
     while (1) {
+    loop:
         struct ts_sample samp;
         int ret;
 
@@ -214,28 +248,51 @@ int main(void)
         if (ret != 1)
             continue;
 
-        for (i = 0; i < NR_BUTTONS; i++)
-            if (button_handle(&buttons [i], &samp))
+        bool dirty = true;
+
+        for (i = 0; i < NR_BUTTONS; i++) {
+            if (button_handle(&buttons[i], &samp)) {
                 switch (i) {
                 case BUTTON_PLAY:
+                    if (!current_drawing.empty())
+                        animation.push_back(current_drawing);
+                    play(animation, false);
+                    current_drawing.clear();
                     refresh_screen();
+                    dirty = false;
                     break;
                 case BUTTON_PLAY_MONOCHROME:
+                    if (!current_drawing.empty())
+                        animation.push_back(current_drawing);
+                    play(animation, true);
+                    current_drawing.clear();
                     refresh_screen();
+                    dirty = false;
+                    break;
+                case BUTTON_NEXT:
+                    animation.push_back(current_drawing);
+                    current_drawing.clear();
+                    refresh_screen(false);
+                    dirty = false;
                     break;
                 case BUTTON_CLEAR:
+                    current_drawing.clear();
                     refresh_screen();
+                    dirty = false;
                     break;
                 case BUTTON_QUIT:
                     quit_pressed = true;
                 }
+            }
+        }
 
         /*printf("%ld.%06ld: %6d %6d %6d\n", samp.tv.tv_sec, samp.tv.tv_usec,
                  samp.x, samp.y, samp.pressure);*/
 
-        if (samp.pressure > 0) {
+        if (samp.pressure > 0 && samp.y > (buttons[0].y + buttons[0].h)) {
             if (mode_pressed) {
                 line(x, y, samp.x, samp.y, BLACK);
+                current_drawing.push_back(Line(x, y, samp.x, samp.y));
             }
             x = samp.x;
             y = samp.y;
@@ -243,9 +300,8 @@ int main(void)
         } else
             mode_pressed = false;
 
-        //mxc_damage(0, 31, xres, yres - 31, MXC_DAMAGE_MODE_MONOCHROME);
-        mxc_damage(0, 0, xres, yres, MXC_DAMAGE_MODE_MONOCHROME, false);
-
+        if (dirty)
+            mxc_damage(0, 0, xres, yres, MXC_DAMAGE_MODE_MONOCHROME, false);
         if (quit_pressed)
             break;
     }

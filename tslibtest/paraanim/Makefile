@@ -14,7 +14,7 @@ CFLAGS   := $(shell PKG_CONFIG_SYSROOT_DIR=$(PKG_CONFIG_SYSROOT_DIR) \
 CPPFLAGS := $(CFLAGS)
 LDFLAGS  := $(shell PKG_CONFIG_SYSROOT_DIR=$(PKG_CONFIG_SYSROOT_DIR) \
                     PKG_CONFIG_LIBDIR=$(PKG_CONFIG_LIBDIR) \
-                    pkg-config --libs tslib)
+                    pkg-config --libs tslib) -lstdc++
 
 PROGRAM := paraanim
 
